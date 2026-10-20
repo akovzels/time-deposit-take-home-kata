@@ -1,24 +1,24 @@
 package org.ikigaidigital;
 
-import org.instancio.Instancio;
-import org.instancio.junit.InstancioExtension;
-import org.junit.jupiter.api.Disabled;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.ValueSource;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.instancio.Select.field;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Stream;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.instancio.Select.field;
+import org.instancio.Instancio;
+import org.instancio.junit.InstancioExtension;
+import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * Characterization tests pinning the CURRENT observable behavior of
@@ -50,83 +50,88 @@ public class TimeDepositCalculatorTest {
     // Deterministic boundary tests (hardcoded expectations)
     // ------------------------------------------------------------------
 
-    /**
-     * days = 30 is the exact eligibility threshold: no plan type (student, premium,
-     * basic, or an unknown type such as "business") earns any interest, so the balance
-     * stays exactly 1000.00.
-     */
-    @ParameterizedTest(name = "planType={0}")
-    @ValueSource(strings = {"student", "premium", "basic", "business"})
-    public void updateBalance_Days30_ShouldLeaveBalanceUnchangedForEveryPlanType(String planType) {
-        double actual = updateBalanceOnce(planType, BALANCE_1000, 30);
+    @Test
+    public void updateBalance_EmptyList_ShouldCompleteWithoutException() {
+        assertThatCode(() -> new TimeDepositCalculator().updateBalance(List.of()))
+                .doesNotThrowAnyException();
+    }
 
-        assertBalanceEquals(actual, "1000.00");
+    @ParameterizedTest(name = "planType={0}, days={1}")
+    @CsvSource({
+            "basic,   31",
+            "student, 31",
+            "premium, 46"
+    })
+    public void updateBalance_ZeroBalance_ShouldRemainZero(String planType, int days) {
+        var deposit = new TimeDeposit(1, planType, 0.0, days);
+
+        new TimeDepositCalculator().updateBalance(List.of(deposit));
+
+        assertThat(deposit.getBalance()).isEqualTo(0.0);
     }
 
     /**
-     * basic at days = 31 (first eligible day) earns 1% / 12 monthly interest:
-     * 1000.00 x 0.01 / 12 = 0.833333... -&gt; HALF_UP to 2 dp -&gt; 0.83 -&gt; 1000.83.
+     * Exact decimal interest is 402.00 * 0.03 / 12 = 1.005, which HALF_UP rounds to 1.01.
+     * The current double calculation produces a value slightly below 1.005;
+     * new BigDecimal(interest) preserves that approximation and rounds it to 1.00.
+     * Pin the resulting 403.00 balance to detect behavior changes during refactoring.
+     * This documents compatibility, not financial correctness; changing the expectation
+     * to 403.01 requires a separate decision to fix the calculation.
      */
     @Test
-    public void updateBalance_Days31_Basic_ShouldEarnInterest() {
-        double actual = updateBalanceOnce("basic", BALANCE_1000, 31);
+    
+    public void updateBalance_Student_ShouldPreserveExistingDoubleRounding() {
+        var deposit = new TimeDeposit(1, "student", 402.00, 31);
 
-        assertBalanceEquals(actual, "1000.83");
+        new TimeDepositCalculator().updateBalance(List.of(deposit));
+        
+        assertThat(deposit.getBalance()).isEqualTo(403.00);
     }
 
+    @ParameterizedTest(name = "[{index}] planType={0}, days={1}, expectedBalance={2}")
+    @CsvSource(textBlock = """
+            basic,      30, 1000.00
+            basic,      31, 1000.83
+            basic,    1000, 1000.83
+            student,    30, 1000.00
+            student,    31, 1002.50
+            student,   365, 1002.50
+            student,   366, 1000.00
+            premium,    30, 1000.00
+            premium,    45, 1000.00
+            premium,    46, 1004.17
+            business,   30, 1000.00
+            business,   31, 1000.00
+            """)
+    public void updateBalance_DeterministicBoundaryCases_ShouldMatchExpectedBalance(
+            String planType, int days, String expectedBalance) {
+        double actual = updateBalanceOnce(planType, BALANCE_1000, days);
+
+        assertBalanceEquals(actual, expectedBalance);
+    }
+    
     /**
-     * student at days = 365 (last eligible day) earns 3% / 12 monthly interest:
-     * 1000.00 x 0.03 / 12 = 2.50 exactly -&gt; 1002.50.
+     * Unknown plan types never match an interest branch, so no interest is added
+     * regardless of the day count (including day counts that would be eligible for
+     * the known plan types).
      */
-    @Test
-    public void updateBalance_Days365_Student_ShouldEarnInterest() {
-        double actual = updateBalanceOnce("student", BALANCE_1000, 365);
-
-        assertBalanceEquals(actual, "1002.50");
+    @ParameterizedTest(name = "[{index}] planType='{0}', days={1}")
+    @CsvSource({
+            "unknown, 31",
+            "unknown, 46",
+            "unknown, 365",
+            "unknown, 1000",
+            "'',      365"
+    })
+    public void updateBalance_UnknownPlanType_ShouldLeaveBalanceUnchanged(String planType, int days) {
+        
+        var deposit = new TimeDeposit(-1, planType, BALANCE_1000, days);
+        
+        new TimeDepositCalculator().updateBalance(List.of(deposit));
+        
+        assertBalanceEquals(deposit.getBalance(), "1000.00");
     }
-
-    /**
-     * student at days = 366 is past the 365-day cap: no interest, balance unchanged.
-     */
-    @Test
-    public void updateBalance_Days366_Student_ShouldLeaveBalanceUnchanged() {
-        double actual = updateBalanceOnce("student", BALANCE_1000, 366);
-
-        assertBalanceEquals(actual, "1000.00");
-    }
-
-    /**
-     * premium at days = 45 is still below the premium threshold (days &gt; 45):
-     * no interest, balance unchanged.
-     */
-    @Test
-    public void updateBalance_Days45_Premium_ShouldLeaveBalanceUnchanged() {
-        double actual = updateBalanceOnce("premium", BALANCE_1000, 45);
-
-        assertBalanceEquals(actual, "1000.00");
-    }
-
-    /**
-     * premium at days = 46 (first eligible day) earns 5% / 12 monthly interest:
-     * 1000.00 x 0.05 / 12 = 4.166666... -&gt; HALF_UP to 2 dp -&gt; 4.17 -&gt; 1004.17.
-     */
-    @Test
-    public void updateBalance_Days46_Premium_ShouldEarnInterest() {
-        double actual = updateBalanceOnce("premium", BALANCE_1000, 46);
-
-        assertBalanceEquals(actual, "1004.17");
-    }
-
-    /**
-     * basic has no upper day bound: days = 1000 still earns the same 1% / 12 interest:
-     * 1000.00 x 0.01 / 12 = 0.833333... -&gt; HALF_UP to 2 dp -&gt; 0.83 -&gt; 1000.83.
-     */
-    @Test
-    public void updateBalance_LargeDays_Basic_ShouldEarnInterest() {
-        double actual = updateBalanceOnce("basic", BALANCE_1000, 1000);
-
-        assertBalanceEquals(actual, "1000.83");
-    }
+    
 
     /**
      * updateBalance returns void and mutates the deposits in the given list in place:
@@ -176,19 +181,12 @@ public class TimeDepositCalculatorTest {
      * Randomized eligible deposits: for every generated balance / days pair inside the
      * eligible range of the plan type, the new balance must equal the old balance plus
      * the interest computed by MIRRORING the current production arithmetic.
-     *
-     * NOTE: this intentionally mirrors the CURRENT implementation as a characterization
-     * check and is NOT exact-decimal arithmetic: the interest is computed as a double
-     * (balance * rate / 12 via double multiplication and division) and then rounded with
-     * BigDecimal.valueOf(interest).setScale(2, HALF_UP), which are the same steps
-     * TimeDepositCalculator.updateBalance performs today.
-     *
      * Reproducibility: Instancio picks a random seed per run; on failure the seed is
      * reported by the Instancio extension and can be pinned with @Seed to reproduce.
      */
     @Test
     public void updateBalance_RandomEligibleDeposits_ShouldMatchMirroredProductionArithmetic() {
-        List<TimeDeposit> deposits = new ArrayList<>();
+        var deposits = new ArrayList<TimeDeposit>();
         deposits.addAll(randomDeposits("basic", 31, 5_000, 25));     // basic: days > 30, no upper bound
         deposits.addAll(randomDeposits("premium", 46, 5_000, 25));  // premium: days > 45
         deposits.addAll(randomDeposits("student", 31, 365, 25));    // student: 30 < days < 366
@@ -203,28 +201,35 @@ public class TimeDepositCalculatorTest {
                 assertThat(deposit.getDays()).isGreaterThan(45);
             }
         }
+        
+        double[] expectedBalances = deposits.stream()
+                .mapToDouble(deposit -> mirroredExpectedBalance(deposit.getBalance(), deposit.getDays(), deposit.getPlanType()))
+                .toArray();
 
-        double[] originalBalances = deposits.stream().mapToDouble(TimeDeposit::getBalance).toArray();
+        double[] originalBalances = deposits.stream().mapToDouble(TimeDeposit::getBalance)
+                .toArray();
 
         new TimeDepositCalculator().updateBalance(deposits);
 
         for (int i = 0; i < deposits.size(); i++) {
             TimeDeposit deposit = deposits.get(i);
-            double expected =
-                    mirroredExpectedBalance(originalBalances[i], deposit.getDays(), deposit.getPlanType());
-            assertThat(BigDecimal.valueOf(deposit.getBalance()))
-                    .as("id=%d, planType=%s, days=%d, originalBalance=%s",
-                            deposit.getId(), deposit.getPlanType(), deposit.getDays(), originalBalances[i])
-                    .isEqualByComparingTo(BigDecimal.valueOf(expected));
+            double expected = expectedBalances[i];
+           
+            assertThat(deposit.getBalance())
+                    .as("index=%d, planType=%s, days=%d, originalBalance=%s",
+                            i, deposit.getPlanType(), deposit.getDays(), originalBalances[i])
+                    .isEqualTo(expected);
+
         }
     }
 
     /**
      * Randomized ineligible deposits: no interest may be added, so the balance must be
-     * exactly unchanged. Three ineligible categories are generated:
+     * exactly unchanged. Four ineligible categories are generated:
      * (a) known plan types with days &lt;= 30 (global gate closed),
      * (b) student with days &gt;= 366 (past the 365-day cap),
-     * (c) unknown plan types with eligible-looking day counts.
+     * (c) unknown plan types with eligible-looking day counts,
+     * (d) premium with days between 31 and 45 (before premium interest starts).
      */
     @Test
     public void updateBalance_RandomIneligibleDeposits_ShouldLeaveBalanceUnchanged() {
@@ -240,6 +245,9 @@ public class TimeDepositCalculatorTest {
         
         // (c) unknown plan types with day counts that look eligible for the known plans.
         deposits.addAll(randomDeposits("unk", 31, 100_000, 15));
+
+        // (d) premium after the global gate opens, but before premium eligibility.
+        deposits.addAll(randomDeposits("premium", 31, 45, 15));
     
         double[] originalBalances = deposits.stream().mapToDouble(TimeDeposit::getBalance).toArray();
 
@@ -248,102 +256,10 @@ public class TimeDepositCalculatorTest {
         for (int i = 0; i < deposits.size(); i++) {
             TimeDeposit deposit = deposits.get(i);
             assertThat(BigDecimal.valueOf(deposit.getBalance()))
-                    .as("id=%d, planType=%s, days=%d, originalBalance=%s",
-                            deposit.getId(), deposit.getPlanType(), deposit.getDays(), originalBalances[i])
+                    .as("index=%d, planType=%s, days=%d, originalBalance=%s",
+                            i, deposit.getPlanType(), deposit.getDays(), originalBalances[i])
                     .isEqualByComparingTo(BigDecimal.valueOf(originalBalances[i]));
         }
-    }
-
-    /**
-     * Randomized days &lt;= 30 for every known plan type (student, premium, basic): the whole
-     * ineligible region BELOW the 30-day gate. This complements the days = 30 edge test
-     * ({@code updateBalance_Days30_ShouldLeaveBalanceUnchangedForEveryPlanType}), which pins
-     * only the single boundary value, by covering the full days &lt;= 30 region with random
-     * balances and day counts: no known plan type earns any interest at or below the gate,
-     * so the balance must stay exactly unchanged.
-     *
-     * Reproducibility: Instancio picks a random seed per run; on failure the seed is
-     * reported by the Instancio extension and can be pinned with @Seed to reproduce.
-     */
-    @ParameterizedTest(name = "planType={0}")
-    @ValueSource(strings = {"student", "premium", "basic"})
-    public void updateBalance_RandomDaysAtMost30_ShouldLeaveBalanceUnchangedForKnownPlanTypes(String planType) {
-  
-        TimeDeposit deposit = randomDeposit(planType, 0, 30);
-
-        double originalBalance = deposit.getBalance();
-
-        new TimeDepositCalculator().updateBalance(List.of(deposit));
-
-        // No tolerance: the balance must be cent-exactly unchanged (no interest at all).
-        assertThat(BigDecimal.valueOf(deposit.getBalance()))
-                .as("id=%d, planType=%s, days=%d, originalBalance=%s",
-                        deposit.getId(), deposit.getPlanType(), deposit.getDays(), originalBalance)
-                .isEqualByComparingTo(BigDecimal.valueOf(originalBalance));
-        
-    }
-
-    /**
-     * Eligibility windows of the known plan types: plan type plus the inclusive random
-     * day range in which the current implementation grants interest.
-     */
-    private static Stream<Object[]> planEligibilityWindows() {
-        return Stream.<Object[]>of(
-                new Object[]{"basic", 31, 5_000},
-                new Object[]{"student", 31, 365},
-                new Object[]{"premium", 46, 5_000});
-    }
-
-    /**
-     * Randomized days &gt; 30 per plan eligibility window: basic [31, 5000] (no upper day
-     * bound), student [31, 365], premium [46, 5000]. This complements the days = 31 edge
-     * test ({@code updateBalance_Days31_Basic_ShouldEarnInterest}), which pins only the
-     * first eligible day of a single plan type, by covering the whole days &gt; 30 region
-     * of every known plan type with random balances and day counts: the new balance must
-     * equal the MIRRORED current production arithmetic and must strictly increase
-     * (interest &gt; 0) in every generated case.
-     *
-     * NOTE: this intentionally mirrors the CURRENT implementation as a characterization
-     * check and is NOT exact-decimal arithmetic: the interest is computed as a double
-     * (balance * rate / 12 via double multiplication and division) and then rounded with
-     * BigDecimal.valueOf(interest).setScale(2, HALF_UP), which are the same steps
-     * TimeDepositCalculator.updateBalance performs today (see mirroredExpectedBalance).
-     *
-     * Reproducibility: Instancio picks a random seed per run; on failure the seed is
-     * reported by the Instancio extension and can be pinned with @Seed to reproduce.
-     */
-    @ParameterizedTest(name = "planType={0}, daysWindow=[{1},{2}]")
-    @MethodSource("planEligibilityWindows")
-    public void updateBalance_RandomDaysOver30_ShouldApplyInterestPerPlanEligibilityWindow(
-            String planType, int minDays, int maxDays) {
-
-        TimeDeposit deposit = randomDeposit(planType, minDays, maxDays);
-
-        double originalBalance = deposit.getBalance();
-
-        new TimeDepositCalculator().updateBalance(List.of(deposit));
-        
-        double expected = mirroredExpectedBalance(originalBalance, deposit.getDays(), planType);
-            assertThat(BigDecimal.valueOf(deposit.getBalance()))
-                    .as("id=%d, planType=%s, days=%d, originalBalance=%s",
-                            deposit.getId(), deposit.getPlanType(), deposit.getDays(), originalBalance)
-                    .isEqualByComparingTo(BigDecimal.valueOf(expected));
-    }
-    
-    /**
-     * Unknown plan types never match an interest branch, so no interest is added
-     * regardless of the day count (including day counts that would be eligible for
-     * the known plan types).
-     */
-    @ParameterizedTest(name = "planType={0}, days={1}")
-    @MethodSource("unknownPlanTypeCases")
-    public void updateBalance_UnknownPlanType_ShouldLeaveBalanceUnchangedForAnyDays(String planType, int days) {
-        
-        var deposit = new TimeDeposit(-1, planType, BALANCE_1000, days);
-        
-        new TimeDepositCalculator().updateBalance(List.of(deposit));
-        
-        assertBalanceEquals(deposit.getBalance(), "1000.00");
     }
 
 
@@ -419,9 +335,7 @@ public class TimeDepositCalculatorTest {
     }
 
     /**
-     * Cent-exact balance comparison: BigDecimal.valueOf(actual) (the canonical double
-     * string, e.g. 1000.83) against a decimal-string expectation, with no tolerance so
-     * that one-cent differences are visible.
+     * Compare the actual balance with a decimal-string expectation without rounding or tolerance.
      */
     private static void assertBalanceEquals(double actualBalance, String expectedBalance) {
         assertThat(BigDecimal.valueOf(actualBalance)).isEqualByComparingTo(expectedBalance);
@@ -443,15 +357,6 @@ public class TimeDepositCalculatorTest {
                         () -> randomDeposit(planType, minDays, maxDays))
                 .limit(count)
                 .toList();
-    }
-    
-    private static Stream<Object[]> unknownPlanTypeCases() {
-        return Stream.<Object[]>of(
-                new Object[]{"unknown_1", 31},
-                new Object[]{"unknown_2", 1000},
-                new Object[]{"unknown_3", 46},
-                new Object[]{"unknown_4", 365},
-                new Object[]{"", 365});
     }
     
     /**
