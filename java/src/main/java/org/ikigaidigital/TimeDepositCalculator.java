@@ -15,9 +15,9 @@ public class TimeDepositCalculator {
 
     public TimeDepositCalculator() {
         this(Map.of(
-                "basic", new FixedRateInterestPolicy(0.01, days -> days > 30),
-                "student", new FixedRateInterestPolicy(0.03, days -> days > 30 && days < 366),
-                "premium", new FixedRateInterestPolicy(0.05, days -> days > 45)
+                PlanTypes.BASIC, new FixedRateInterestPolicy(0.01, days -> days > 30),
+                PlanTypes.STUDENT, new FixedRateInterestPolicy(0.03, days -> days > 30 && days < 366),
+                PlanTypes.PREMIUM, new FixedRateInterestPolicy(0.05, days -> days > 45)
         ));
     }
 
