@@ -3,28 +3,39 @@ package org.ikigaidigital;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
+import java.util.Map;
+
+import org.ikigaidigital.interest.FixedRateInterestPolicy;
+import org.ikigaidigital.interest.InterestPolicy;
 
 public class TimeDepositCalculator {
-    public void updateBalance(List<TimeDeposit> xs) {
-        for (int i = 0; i < xs.size(); i++) {
-            double interest = 0;
+    private static final InterestPolicy NO_INTEREST = deposit -> 0;
 
-            if (xs.get(i).getDays() > 30) {
-                if (xs.get(i).getPlanType().equals("student")) {
-                    if (xs.get(i).getDays() < 366) {
-                        interest += xs.get(i).getBalance() * 0.03 / 12;
-                    }
-                } else if (xs.get(i).getPlanType().equals("premium")) {
-                    if (xs.get(i).getDays() > 45) {
-                        interest += xs.get(i).getBalance() * 0.05 / 12;
-                    }
-                } else if (xs.get(i).getPlanType().equals("basic")) {
-                    interest += xs.get(i).getBalance() * 0.01 / 12;
-                }
-            }
+    private final Map<String, InterestPolicy> policies;
 
-            double a2d = xs.get(i).getBalance() + (new BigDecimal(interest).setScale(2, RoundingMode.HALF_UP)).doubleValue();
-            xs.get(i).setBalance(a2d);
+    public TimeDepositCalculator() {
+        this(Map.of(
+                "basic", new FixedRateInterestPolicy(0.01, days -> days > 30),
+                "student", new FixedRateInterestPolicy(0.03, days -> days > 30 && days < 366),
+                "premium", new FixedRateInterestPolicy(0.05, days -> days > 45)
+        ));
+    }
+
+    public TimeDepositCalculator(Map<String, InterestPolicy> policies) {
+        this.policies = Map.copyOf(policies);
+    }
+
+    public void updateBalance(List<TimeDeposit> deposits) {
+        for (TimeDeposit deposit : deposits) {
+            InterestPolicy policy = policies.getOrDefault(deposit.getPlanType(), NO_INTEREST);
+            double interest = policy.calculateInterest(deposit);
+
+            // Preserve the original double-to-decimal rounding behavior during refactoring.
+            double roundedInterest = new BigDecimal(interest)
+                    .setScale(2, RoundingMode.HALF_UP)
+                    .doubleValue();
+
+            deposit.setBalance(deposit.getBalance() + roundedInterest);
         }
     }
 }

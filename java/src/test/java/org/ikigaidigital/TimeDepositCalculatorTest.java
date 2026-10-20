@@ -9,8 +9,10 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
+import org.ikigaidigital.interest.InterestPolicy;
 import org.instancio.Instancio;
 import org.instancio.junit.InstancioExtension;
 import org.junit.jupiter.api.Disabled;
@@ -49,6 +51,17 @@ public class TimeDepositCalculatorTest {
     // ------------------------------------------------------------------
     // Deterministic boundary tests (hardcoded expectations)
     // ------------------------------------------------------------------
+
+    @Test
+    public void updateBalance_CustomPolicy_ShouldApplyInterestWithoutChangingCalculator() {
+        InterestPolicy bonusPolicy = deposit -> 7.25;
+        var calculator = new TimeDepositCalculator(Map.of("bonus", bonusPolicy));
+        var deposit = new TimeDeposit(1, "bonus", 1000.00, 100);
+
+        calculator.updateBalance(List.of(deposit));
+
+        assertThat(deposit.getBalance()).isEqualTo(1007.25);
+    }
 
     @Test
     public void updateBalance_EmptyList_ShouldCompleteWithoutException() {
