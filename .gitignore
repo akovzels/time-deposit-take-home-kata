@@ -8,3 +8,6 @@ __pycache__/
 .idea/
 package-lock.json
 .vscode/
+/java/.settings/
+/java/.classpath
+/java/.project
