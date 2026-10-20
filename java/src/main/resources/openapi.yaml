@@ -1,0 +1,243 @@
+openapi: 3.0.3
+
+# XA Bank Time Deposit API contract.
+#
+# This file deliberately defines the API contract ONLY: it does not describe
+# any implementation details beyond the compatibility assumptions documented
+# below, which pin the contract to the existing Java code's behaviour.
+info:
+  title: XA Bank Time Deposit API
+  version: 1.0.0
+  description: |
+    REST API for XA Bank time deposits.
+
+    This contract defines exactly two operations, as required by the
+    assignment: retrieving all time deposits, and applying a balance update
+    to all time deposits. No other operations are part of this contract.
+
+    ## API versioning
+
+    The API is versioned in the URI path with a major version segment
+    (`/api/v1/...`). `v1` is the initial and only version; the major version
+    will only increase if a future change is not backward compatible with
+    this contract. Additive, backward-compatible changes (for example new
+    optional fields or additional examples) do not create a new version.
+
+    ## Calculation and compatibility assumptions
+
+    This contract deliberately documents the behaviour of the existing Java
+    implementation (`TimeDepositCalculator`) instead of redefining it:
+
+    * The existing `TimeDepositCalculator`, including its `updateBalance`
+      method, determines the calculation behaviour. Its observable behaviour
+      is intentionally preserved and is not reinterpreted by this contract.
+    * Interest rates are nominal annual rates, divided by 12 for each
+      eligible calculation (`basic`: 1% / 12, `student`: 3% / 12,
+      `premium`: 5% / 12).
+    * No interest is credited for the first 30 days for any plan.
+    * `student` eligibility covers days 31-365 inclusive; "one year" is
+      interpreted as 365 elapsed days.
+    * `premium` eligibility starts at day 46 (no interest on day 45 or
+      earlier).
+    * Plan types other than `basic`, `student`, and `premium` are supported
+      and earn no interest; `planType` is therefore an open string field and
+      is deliberately not restricted to an enum.
+    * A balance update only changes `balance`. It never changes `days`,
+      `planType`, or `withdrawals`.
+    * The existing double arithmetic and HALF_UP rounding of the interest to
+      two decimal places are intentionally preserved, including their known
+      precision limitations. Monetary amounts are represented in this
+      contract as decimal values; this is a storage and representation
+      choice only and is neither a fix for, nor a claim about, the
+      calculator's arithmetic precision.
+
+servers:
+  - url: http://localhost:8080
+    description: >
+      Illustrative server URL. The actual host and port are defined by the
+      deployment and do not affect this contract.
+
+tags:
+  - name: time-deposits
+    description: Time deposit retrieval and balance updates.
+
+paths:
+  /api/v1/time-deposits:
+    get:
+      tags:
+        - time-deposits
+      operationId: getAllTimeDeposits
+      summary: Retrieve all time deposits
+      description: |
+        Returns all time deposits stored in the database, each including its
+        withdrawals.
+
+        * Returns an empty array when the database contains no time deposits.
+        * Returns an empty `withdrawals` array for a deposit that has no
+          withdrawals.
+        * All listed fields are always present in every deposit and every
+          withdrawal.
+      responses:
+        '200':
+          description: >
+            All time deposits. The array is empty when the database is
+            empty.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TimeDeposit'
+              examples:
+                depositsWithWithdrawals:
+                  summary: >
+                    Deposits of every supported plan type, including one
+                    deposit with withdrawals and one without, plus an
+                    unknown plan type that earns no interest.
+                  value:
+                    - id: 1
+                      planType: student
+                      balance: 1002.50
+                      days: 365
+                      withdrawals:
+                        - id: 1
+                          timeDepositId: 1
+                          amount: 50.25
+                          date: '2026-06-15'
+                    - id: 2
+                      planType: premium
+                      balance: 1004.17
+                      days: 46
+                      withdrawals: []
+                    - id: 3
+                      planType: basic
+                      balance: 1234567.00
+                      days: 45
+                      withdrawals: []
+                    - id: 4
+                      planType: business
+                      balance: 5000.00
+                      days: 1000
+                      withdrawals:
+                        - id: 2
+                          timeDepositId: 4
+                          amount: 1000.00
+                          date: '2026-08-01'
+                emptyCollection:
+                  summary: Empty database.
+                  value: []
+
+  /api/v1/time-deposits/balance-updates:
+    post:
+      tags:
+        - time-deposits
+      operationId: updateTimeDepositBalances
+      summary: Apply a balance update to all time deposits
+      description: |
+        Synchronously recalculates and persists the updated balance of every
+        time deposit in the database, using the calculation behaviour of the
+        existing `TimeDepositCalculator` (see the compatibility assumptions
+        in the API description).
+
+        Semantics:
+
+        * Each successful invocation applies exactly one calculation (one
+          monthly interest amount per eligible deposit, as computed by the
+          existing `TimeDepositCalculator`). The operation is therefore NOT
+          idempotent: invoking it twice applies two calculations.
+        * The update is atomic: either all balance changes are committed, or
+          none are.
+        * An empty database is a successful operation (there are simply no
+          deposits to update).
+        * The update changes `balance` only; it never changes `days`,
+          `planType`, or `withdrawals`.
+
+        This contract deliberately contains no request body, no calendar
+        periods, no scheduling, no background jobs, and no idempotency
+        keys. It also deliberately defines no error schemas: handling
+        invalid input or exceptions is outside the scope of the assignment.
+      responses:
+        '204':
+          description: >
+            All balances were recalculated and persisted successfully; the
+            response has no body. An empty database also yields 204.
+
+components:
+  schemas:
+    TimeDeposit:
+      type: object
+      description: A time deposit plan, including its withdrawals.
+      required:
+        - id
+        - planType
+        - balance
+        - days
+        - withdrawals
+      properties:
+        id:
+          type: integer
+          format: int32
+          description: Unique identifier of the time deposit (primary key of the timeDeposits table).
+          example: 1
+        planType:
+          type: string
+          description: |
+            Plan type, for example `basic`, `student`, or `premium`.
+            Open-ended by design: any other plan type is supported and
+            simply earns no interest, so this field is deliberately NOT
+            restricted to an enum.
+          example: student
+        balance:
+          type: number
+          description: >
+            Current balance as a decimal value. Deliberately declared
+            without a float or double format: monetary amounts are exact
+            decimal values in storage and representation. This does not
+            change the calculator's preserved double arithmetic and
+            rounding behaviour (see the compatibility assumptions in the
+            API description).
+          example: 1002.50
+        days:
+          type: integer
+          format: int32
+          description: >
+            Elapsed days since the deposit was opened; used for interest
+            eligibility.
+          example: 365
+        withdrawals:
+          type: array
+          description: Withdrawals made from this deposit; empty array when there are none.
+          items:
+            $ref: '#/components/schemas/Withdrawal'
+
+    Withdrawal:
+      type: object
+      description: A withdrawal made from a time deposit.
+      required:
+        - id
+        - timeDepositId
+        - amount
+        - date
+      properties:
+        id:
+          type: integer
+          format: int32
+          description: Unique identifier of the withdrawal (primary key of the withdrawals table).
+          example: 1
+        timeDepositId:
+          type: integer
+          format: int32
+          description: Identifier of the time deposit this withdrawal belongs to (foreign key).
+          example: 1
+        amount:
+          type: number
+          description: >
+            Withdrawn amount as a decimal value; declared without a float
+            or double format for the same reason as `balance`.
+          example: 50.25
+        date:
+          type: string
+          format: date
+          description: Withdrawal date (RFC 3339 full-date, for example '2026-06-15').
+          example: '2026-06-15'
+
