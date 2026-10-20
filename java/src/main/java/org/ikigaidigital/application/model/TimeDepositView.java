@@ -6,8 +6,11 @@ import java.util.List;
 /**
  * Application read model of a time deposit, including its withdrawals.
  *
- * <p>This is an application-layer read model, not an HTTP DTO and not a
- * persistence entity; it carries no serialization or ORM annotations.</p>
+ * <p>Owned by the application core; carries no serialization or ORM
+ * annotations. The HTTP adapter reuses it as the response representation
+ * only because the OpenAPI contract is currently isomorphic to this
+ * model — if the contract diverges, the web adapter must introduce its
+ * own DTO rather than reshaping this model.</p>
  */
 public record TimeDepositView(
         int id,

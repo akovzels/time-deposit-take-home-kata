@@ -6,8 +6,11 @@ import java.time.LocalDate;
 /**
  * Application read model of a withdrawal.
  *
- * <p>This is an application-layer read model, not an HTTP DTO and not a
- * persistence entity; it carries no serialization or ORM annotations.</p>
+ * <p>Owned by the application core; carries no serialization or ORM
+ * annotations. It is reused in the HTTP response (inside
+ * {@link TimeDepositView}) only because the OpenAPI contract is currently
+ * isomorphic to this model — if the contract diverges, the web adapter must
+ * introduce its own DTO rather than reshaping this model.</p>
  */
 public record WithdrawalView(
         int id,

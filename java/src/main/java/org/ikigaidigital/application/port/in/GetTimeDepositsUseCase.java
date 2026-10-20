@@ -6,9 +6,6 @@ import org.ikigaidigital.application.model.TimeDepositView;
 
 /**
  * Inbound port: retrieving all time deposits.
- *
- * <p>Returns the read models as stored; the use case does not recalculate
- * balances and does not interpret plan types.</p>
  */
 public interface GetTimeDepositsUseCase {
 

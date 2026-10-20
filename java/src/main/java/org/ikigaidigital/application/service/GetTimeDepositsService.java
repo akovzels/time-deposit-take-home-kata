@@ -8,9 +8,6 @@ import org.ikigaidigital.application.port.out.TimeDepositRepository;
 
 /**
  * Implements {@link GetTimeDepositsUseCase}.
- *
- * <p>Returns the repository's read models as stored: no balances are
- * recalculated and no plan types are interpreted.</p>
  */
 public class GetTimeDepositsService implements GetTimeDepositsUseCase {
 
