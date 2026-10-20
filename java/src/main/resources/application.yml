@@ -1,0 +1,7 @@
+# Local-development defaults match java/docker-compose.yml; override in real
+# deployments through the environment variables.
+spring:
+  datasource:
+    url: ${TIME_DEPOSIT_DB_URL:jdbc:postgresql://localhost:5432/time_deposit}
+    username: ${TIME_DEPOSIT_DB_USERNAME:time_deposit}
+    password: ${TIME_DEPOSIT_DB_PASSWORD:time_deposit}

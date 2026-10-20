@@ -1,0 +1,36 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      TIME_DEPOSIT_DB_URL: jdbc:postgresql://postgres:5432/time_deposit
+      TIME_DEPOSIT_DB_USERNAME: time_deposit
+      TIME_DEPOSIT_DB_PASSWORD: time_deposit
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17.5
+    environment:
+      POSTGRES_DB: time_deposit
+      POSTGRES_USER: time_deposit
+      POSTGRES_PASSWORD: time_deposit
+    ports:
+      - "5432:5432"
+    volumes:
+      - time_deposit_pgdata:/var/lib/postgresql/data
+    # Ready only when the time_deposit database accepts connections for the
+    # time_deposit user (pg_isready is built into the postgres image).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U time_deposit -d time_deposit"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  time_deposit_pgdata:
