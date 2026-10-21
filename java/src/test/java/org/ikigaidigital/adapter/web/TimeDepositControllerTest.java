@@ -1,11 +1,17 @@
 package org.ikigaidigital.adapter.web;
 
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
@@ -15,12 +21,15 @@ import java.util.List;
 import org.ikigaidigital.application.model.TimeDepositView;
 import org.ikigaidigital.application.model.WithdrawalView;
 import org.ikigaidigital.application.port.in.GetTimeDepositsUseCase;
+import org.ikigaidigital.application.port.in.UpdateBalancesUseCase;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
  * Docker-free controller slice test: only the web layer is loaded, the use
@@ -40,6 +49,71 @@ public class TimeDepositControllerTest {
 
     @MockitoBean
     private GetTimeDepositsUseCase getTimeDeposits;
+
+    @MockitoBean
+    private UpdateBalancesUseCase updateBalances;
+
+    @Test
+    public void getAllTimeDeposits_unexpectedFailure_returnsSafeProblemDetail() throws Exception {
+        when(getTimeDeposits.getTimeDeposits()).thenThrow(new IllegalStateException("Sensitive database details"));
+
+        expectInternalServerProblem(get("/api/v1/time-deposits"), "/api/v1/time-deposits");
+    }
+
+    @Test
+    public void updateBalances_unexpectedFailure_returnsSafeProblemDetail() throws Exception {
+        doThrow(new IllegalStateException("Sensitive database details")).when(updateBalances).updateBalances();
+
+        expectInternalServerProblem(post("/api/v1/time-deposits/balance-updates"),
+                "/api/v1/time-deposits/balance-updates");
+    }
+
+    @Test
+    public void unsupportedMethod_preservesMethodNotAllowedStatusAndHeader() throws Exception {
+        mockMvc.perform(put("/api/v1/time-deposits"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().exists(HttpHeaders.ALLOW))
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.status").value(405));
+
+        verifyNoInteractions(getTimeDeposits, updateBalances);
+    }
+
+    @Test
+    public void unknownPath_preservesNotFoundStatus() throws Exception {
+        mockMvc.perform(get("/api/v1/unknown"))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.status").value(404));
+
+        verifyNoInteractions(getTimeDeposits, updateBalances);
+    }
+
+    private void expectInternalServerProblem(MockHttpServletRequestBuilder request, String instance) throws Exception {
+        mockMvc.perform(request)
+                .andExpect(status().isInternalServerError())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(content().json("""
+                        {
+                          "type": "about:blank",
+                          "title": "Internal Server Error",
+                          "status": 500,
+                          "detail": "An unexpected error occurred.",
+                          "instance": "%s"
+                        }
+                        """.formatted(instance), true));
+    }
+
+    @Test
+    public void updateBalances_returnsNoContent() throws Exception {
+        mockMvc.perform(post("/api/v1/time-deposits/balance-updates"))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        verify(updateBalances).updateBalances();
+        verifyNoMoreInteractions(updateBalances);
+        verifyNoInteractions(getTimeDeposits);
+    }
 
     @Test
     public void getAllTimeDeposits_emptyRepository_returnsEmptyArray() throws Exception {

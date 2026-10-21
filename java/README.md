@@ -8,11 +8,10 @@ Implemented so far: the Spring Boot bootstrap, the framework-independent hexagon
 application core (ports, services, read models), the existing interest calculator,
 the OpenAPI contract (`src/main/resources/openapi.yaml`), the PostgreSQL
 persistence adapter (`JdbcTimeDepositRepository` with Flyway migrations under
-`src/main/resources/db/migration`), and the retrieval endpoint
-(`GET /api/v1/time-deposits`, see the API section below).
+`src/main/resources/db/migration`), and both HTTP endpoints described below.
 
-**Application startup now requires PostgreSQL.** The balance-update endpoint
-and its production transaction wrapper are **not implemented yet**.
+**Application startup requires PostgreSQL.** Balance updates run synchronously
+in one transaction covering loading, calculation, and persistence.
 
 All commands below run from the `java` directory.
 
@@ -31,8 +30,7 @@ using the commands below. Local Java and Maven installations are not required fo
 this Docker workflow.
 
 The application waits for PostgreSQL's healthcheck before starting and connects
-to the `postgres` service. Port `8080` is published on the host; the retrieval
-endpoint is available and the balance-update endpoint is not implemented yet.
+to the `postgres` service. Both endpoints are available on host port `8080`.
 Follow application startup logs with:
 
 ```
@@ -88,8 +86,6 @@ java -jar target/time-deposit-kata-1.0-SNAPSHOT.jar
 
 ## API
 
-Retrieval is implemented; balance updates are not implemented yet.
-
 Example GET request:
 
 ```
@@ -119,7 +115,42 @@ Example response:
 ]
 ```
 
+Apply one balance update to all deposits:
+
+```
+curl -i -X POST http://localhost:8080/api/v1/time-deposits/balance-updates
+```
+
+The request has no body and returns `204 No Content`, including for an empty
+database. Every successful call applies another calculation; repeated requests
+are not idempotent. Only balances change: days, plan types, and withdrawals stay
+unchanged. Existing calculator arithmetic and rounding are preserved.
+
+All deposits are loaded with `SELECT ... FOR UPDATE` inside a single transaction.
+Locks are held until commit or rollback, so concurrent update requests wait and
+then calculate from the balances committed by the preceding request. A failure
+rolls back every balance change. This approach loads all deposits into memory and
+holds their locks for the duration of the request.
+
 The full contract is defined in `src/main/resources/openapi.yaml`.
+
+Unexpected failures return `500 Internal Server Error` with RFC 7807
+`application/problem+json`:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Internal Server Error",
+  "status": 500,
+  "detail": "An unexpected error occurred.",
+  "instance": "/api/v1/time-deposits/balance-updates"
+}
+```
+
+Exception details and stack traces are logged on the server and are not included
+in this response. A failed balance update still rolls back before the error
+response is returned. Standard Spring MVC errors retain their HTTP status and
+headers and use Problem Details responses.
 
 ## Tests
 

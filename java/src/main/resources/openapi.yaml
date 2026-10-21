@@ -126,6 +126,8 @@ paths:
                 emptyCollection:
                   summary: Empty database.
                   value: []
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /api/v1/time-deposits/balance-updates:
     post:
@@ -154,16 +156,55 @@ paths:
 
         This contract deliberately contains no request body, no calendar
         periods, no scheduling, no background jobs, and no idempotency
-        keys. It also deliberately defines no error schemas: handling
-        invalid input or exceptions is outside the scope of the assignment.
+        keys. Unexpected failures return a Problem Details response after
+        the transaction has rolled back.
       responses:
         '204':
           description: >
             All balances were recalculated and persisted successfully; the
             response has no body. An empty database also yields 204.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
 components:
+  responses:
+    InternalServerError:
+      description: Unexpected server failure. Internal exception details are logged only on the server.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Internal Server Error
+            status: 500
+            detail: An unexpected error occurred.
+            instance: /api/v1/time-deposits/balance-updates
   schemas:
+    Problem:
+      type: object
+      description: RFC 7807 Problem Details response.
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
     TimeDeposit:
       type: object
       description: A time deposit plan, including its withdrawals.

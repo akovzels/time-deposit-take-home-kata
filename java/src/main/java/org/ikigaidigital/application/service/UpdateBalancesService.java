@@ -17,7 +17,7 @@ import org.ikigaidigital.application.port.out.TimeDepositRepository;
  * {@link TimeDepositRepository#updateBalances(List)}.</p>
  *
  * <p>Transaction boundary (adapter responsibility, not implemented here):
- * the eventual production adapter must wrap loading, calculation, and
+ * the production adapter must wrap loading, calculation, and
  * persistence in a single transaction, with write locks acquired in
  * {@code findAllForUpdate()}. The application core manages neither
  * transactions nor locks.</p>
