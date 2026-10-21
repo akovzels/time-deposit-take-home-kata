@@ -2,58 +2,76 @@
 
 Spring Boot application (Java 17, Maven, PostgreSQL) for the XA Bank time deposit take-home exercise.
 
-## Status
-
-Implemented so far: the Spring Boot bootstrap, the framework-independent hexagonal
-application core (ports, services, read models), the existing interest calculator,
-the OpenAPI contract (`src/main/resources/openapi.yaml`), the PostgreSQL
-persistence adapter (`JdbcTimeDepositRepository` with Flyway migrations under
-`src/main/resources/db/migration`), and both HTTP endpoints described below.
-
-**Application startup requires PostgreSQL.** Balance updates run synchronously
-in one transaction covering loading, calculation, and persistence.
-
 All commands below run from the `java` directory.
 
-## Run with Docker
+## Getting Started
 
-Requires Docker with Compose. Build the application image and start the application
-and PostgreSQL:
+Requires a running Docker daemon with Compose and available host ports `8080`
+and `5432`. Local Java and Maven installations are not required.
+
+### 1. Start the application
 
 ```
 docker compose up --build -d
 ```
 
-The multi-stage Dockerfile builds the executable JAR with Maven and Java 17,
-then runs it as a non-root user in a Java 17 runtime image. Tests are run separately
-using the commands below. Local Java and Maven installations are not required for
-this Docker workflow.
-
-The application waits for PostgreSQL's healthcheck before starting and connects
-to the `postgres` service. Both endpoints are available on host port `8080`.
-Follow application startup logs with:
+Compose builds the Java 17 application and starts PostgreSQL. The application
+starts after the database healthcheck succeeds; Flyway creates the schema.
+Follow the application logs and wait for `Started TimeDepositApplication`:
 
 ```
 docker compose logs -f app
 ```
 
-Stop the containers (database data remains in the named volume):
+Press `Ctrl+C` to stop following the logs; the containers keep running.
+
+### 2. Load sample deposits (optional)
+
+After application startup, load [sample-data.sql](sample-data.sql) into the
+database:
+
+```
+docker compose cp ./sample-data.sql postgres:/tmp/time-deposit-sample-data.sql
+docker compose exec -T postgres psql -U time_deposit -d time_deposit -v ON_ERROR_STOP=1 -f /tmp/time-deposit-sample-data.sql
+```
+
+The script adds eight deposits and two withdrawals in one transaction, with
+generated IDs. It covers eligibility boundaries, an unknown plan, and deposits
+with and without withdrawals. Data is loaded manually; running the script again
+adds another set without changing existing rows.
+
+### 3. Open Swagger UI
+
+Open [Swagger UI](http://localhost:8080/swagger-ui.html) in your browser.
+
+1. Call **GET `/api/v1/time-deposits`** to view all time deposits.
+2. Call **POST `/api/v1/time-deposits/balance-updates`** to update balances.
+
+After one POST, the sample balances are:
+
+| Plan | Days | Before | After |
+|---|---:|---:|---:|
+| basic | 30 | 1200.00 | 1200.00 |
+| basic | 31 | 1200.00 | 1201.00 |
+| student | 31 | 402.00 | 403.00 |
+| student | 365 | 1200.00 | 1203.00 |
+| student | 366 | 1200.00 | 1200.00 |
+| premium | 45 | 1200.00 | 1200.00 |
+| premium | 46 | 1200.00 | 1205.00 |
+| business | 1000 | 1200.00 | 1200.00 |
+
+The student result preserves the original calculator's double arithmetic and
+rounding. Every additional POST applies another calculation. Days, plan types,
+and withdrawals remain unchanged.
+
+### 4. Stop the application
+
+Stop the containers; database data remains in the named volume and is reused on
+the next startup:
 
 ```
 docker compose down
 ```
-
-## Database (local development)
-
-To run the application locally instead, start only PostgreSQL and wait for it to
-be ready:
-
-```
-docker compose up -d --wait postgres
-```
-
-If the Docker application is already running, stop it with `docker compose stop app`
-before starting a local application on the same port.
 
 ## Configuration
 
@@ -71,7 +89,9 @@ Flyway applies the real migrations at application startup.
 
 ## Application startup (without Docker)
 
-Requires Java 17, Maven, and the running PostgreSQL instance described above.
+Requires Java 17, Maven, and PostgreSQL. Start only the database with
+`docker compose up -d --wait postgres`. If the Docker application is already
+running, stop it with `docker compose stop app` to free port `8080`.
 
 ```
 mvn spring-boot:run
@@ -84,73 +104,48 @@ mvn clean package
 java -jar target/time-deposit-kata-1.0-SNAPSHOT.jar
 ```
 
-## API
+## Architecture
 
-Example GET request:
+Hexagonal architecture keeps the calculator and application services independent
+of Spring. HTTP controllers call inbound use-case ports; services depend on the
+outbound repository port, implemented by the PostgreSQL JDBC adapter. Spring
+configuration wires the components. A transaction decorator wraps the update
+use case, covering loading with `SELECT ... FOR UPDATE`, calculation, and saving.
+Read models carry decimal amounts from the database to the HTTP response.
 
-```
-curl http://localhost:8080/api/v1/time-deposits
-```
+## Assumptions and trade-offs
 
-Example response:
+- The assignment describes "monthly interest" with rates of 1%, 3%, and 5%,
+  but the existing implementation divides those rates by 12. Since the assignment
+  explicitly requires preserving its behavior, the rates are interpreted as
+  annual, with one month's interest applied per eligible calculation.
+- Eligibility boundaries follow the existing implementation: basic starts on
+  day 31, student applies on days 31–365 inclusive, and premium starts on day 46.
+  "One year" is interpreted as 365 elapsed days. Unknown plans earn no interest.
+- Binary floating-point (`double`) can produce inaccurate monetary calculations.
+  The assignment requires preserving the shared `TimeDeposit` contract and the
+  observable behavior of `updateBalance`, so this limitation remains. For example,
+  student interest on `402.00` is mathematically `402 × 0.03 / 12 = 1.005`, which
+  rounds HALF_UP to `1.01`, giving `403.01`. The existing double calculation
+  produces a value slightly below `1.005`; `new BigDecimal(double)` preserves
+  that approximation, so interest rounds to `1.00` and the balance becomes
+  `403.00`. Without the compatibility constraint, use `BigDecimal` throughout
+  monetary calculations, or store balances as integer minor units (for example,
+  cents in a `long` or `BigInteger`). Integer storage is exact, but fractional
+  interest still requires precise arithmetic and an explicit rounding policy.
+  Database storage and read models already use decimal amounts; this does not
+  correct the calculator's double arithmetic.
+- Every successful POST applies another calculation. There is no period tracking
+  or scheduling; `days` is supplied externally and is not updated here.
+- A single transaction is acceptable for a small dataset. A production design
+  would process deposits concurrently in separate transactions, track opening
+  dates and processed accrual periods, and calculate interest from daily balances
+  and effective plan terms. Unique deposit/period records would prevent duplicate
+  accruals, while per-deposit locking would protect concurrent balance changes.
 
-```json
-[
-  {
-    "id": 1,
-    "planType": "student",
-    "balance": 1002.50,
-    "days": 365,
-    "withdrawals": [
-      { "id": 1, "timeDepositId": 1, "amount": 50.25, "date": "2026-06-15" }
-    ]
-  },
-  {
-    "id": 2,
-    "planType": "premium",
-    "balance": 1004.17,
-    "days": 46,
-    "withdrawals": []
-  }
-]
-```
-
-Apply one balance update to all deposits:
-
-```
-curl -i -X POST http://localhost:8080/api/v1/time-deposits/balance-updates
-```
-
-The request has no body and returns `204 No Content`, including for an empty
-database. Every successful call applies another calculation; repeated requests
-are not idempotent. Only balances change: days, plan types, and withdrawals stay
-unchanged. Existing calculator arithmetic and rounding are preserved.
-
-All deposits are loaded with `SELECT ... FOR UPDATE` inside a single transaction.
-Locks are held until commit or rollback, so concurrent update requests wait and
-then calculate from the balances committed by the preceding request. A failure
-rolls back every balance change. This approach loads all deposits into memory and
-holds their locks for the duration of the request.
-
-The full contract is defined in `src/main/resources/openapi.yaml`.
-
-Unexpected failures return `500 Internal Server Error` with RFC 7807
-`application/problem+json`:
-
-```json
-{
-  "type": "about:blank",
-  "title": "Internal Server Error",
-  "status": 500,
-  "detail": "An unexpected error occurred.",
-  "instance": "/api/v1/time-deposits/balance-updates"
-}
-```
-
-Exception details and stack traces are logged on the server and are not included
-in this response. A failed balance update still rolls back before the error
-response is returned. Standard Spring MVC errors retain their HTTP status and
-headers and use Problem Details responses.
+The [OpenAPI contract](src/main/resources/openapi.yaml) defines the operations,
+response schemas, and Problem Details errors. The [AI workflow](AI_WORKFLOW.md)
+describes tools, responsibilities, and the prompts used during development.
 
 ## Tests
 

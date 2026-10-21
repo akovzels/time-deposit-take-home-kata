@@ -5,3 +5,9 @@ spring:
     url: ${TIME_DEPOSIT_DB_URL:jdbc:postgresql://localhost:5432/time_deposit}
     username: ${TIME_DEPOSIT_DB_USERNAME:time_deposit}
     password: ${TIME_DEPOSIT_DB_PASSWORD:time_deposit}
+
+springdoc:
+  enable-default-api-docs: false
+  swagger-ui:
+    url: /openapi.yaml
+    disable-swagger-default-url: true

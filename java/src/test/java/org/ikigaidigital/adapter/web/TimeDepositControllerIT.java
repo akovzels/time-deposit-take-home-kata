@@ -3,6 +3,7 @@ package org.ikigaidigital.adapter.web;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -21,6 +22,7 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -85,6 +87,24 @@ public class TimeDepositControllerIT {
         Set<String> names = new HashSet<>();
         node.fieldNames().forEachRemaining(names::add);
         return names;
+    }
+
+    @Test
+    public void swaggerUi_loadsTheExistingContract() throws Exception {
+        ResponseEntity<String> page = restTemplate.getForEntity("/swagger-ui/index.html", String.class);
+        assertThat(page.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(page.getBody()).contains("swagger-ui.css");
+
+        ResponseEntity<String> config = restTemplate.getForEntity("/v3/api-docs/swagger-config", String.class);
+        assertThat(config.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(MAPPER.readTree(config.getBody()).get("url").asText()).isEqualTo("/openapi.yaml");
+
+        ResponseEntity<String> contract = restTemplate.getForEntity("/openapi.yaml", String.class);
+        assertThat(contract.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(contract.getBody()).isEqualTo(
+                new ClassPathResource("openapi.yaml").getContentAsString(StandardCharsets.UTF_8));
+        assertThat(restTemplate.getForEntity("/v3/api-docs", String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     @Test
